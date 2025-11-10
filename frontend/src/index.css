@@ -1,0 +1,17 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+.wallet-adapter-button-trigger {
+  background-color: #2563eb;
+  color: white;
+  font-weight: 600;
+  border: none;
+  border-radius: 8px;
+  padding: 0 20px;
+  height: 48px;
+  line-height: 48px;
+}
+.wallet-adapter-button-trigger:hover {
+  background-color: #1d4ed8;
+}
