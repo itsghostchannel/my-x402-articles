@@ -1,10 +1,10 @@
-# X402 Drift: Blockchain-Powered Content Monetization Platform
+# x402 Articles: Blockchain-Powered Content Monetization
 
-A modern micropayment system built on Solana blockchain that enables content creators to monetize their articles through blockchain-based payments using the x402 HTTP payment protocol.
+A modern micropayment system built on the Solana blockchain that enables content creators to monetize their articles through blockchain-based payments using the x402 HTTP payment protocol. Readers and AI agents can now pay per article (from $0.01) with minimal fees, so creators keep nearly all revenue.
 
 ## 🌟 Overview
 
-**X402 Drift** is a comprehensive content management system (CMS) that combines traditional web technologies with cutting-edge blockchain payments. It allows authors to publish premium content behind a paywall while providing readers with seamless access through Solana SPL token payments.
+**X402 Articles** is a comprehensive content management system (CMS) that combines traditional web technologies with cutting-edge blockchain payments. It allows authors to publish premium content behind a paywall while providing readers with seamless access through Solana SPL token payments.
 
 ### Key Features
 
@@ -335,4 +335,4 @@ If you encounter any issues:
 
 ---
 
-**Built with ❤️ for the Solana ecosystem**
+**Built in Berlin with ❤️ for the Solana ecosystem**
