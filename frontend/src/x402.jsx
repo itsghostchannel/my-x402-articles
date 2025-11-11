@@ -1,8 +1,10 @@
 import { Buffer } from "buffer";
-import React, { createContext, useCallback } from "react"; 
-import { useConnection, useWallet } from "@solana/wallet-adapter-react";
-import { PublicKey, Transaction, TransactionInstruction } from "@solana/web3.js";
+import React, { createContext, useCallback } from "react";
+import { useSolanaAddress, useIsSignedIn } from "@coinbase/cdp-hooks";
+import { v4 as uuidv4 } from 'uuid';
+import { PublicKey, Transaction, TransactionInstruction, clusterApiUrl, Connection } from "@solana/web3.js";
 import { getMint, createTransferInstruction, getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, getAccount } from "@solana/spl-token";
+import { SendSolanaTransactionButton } from "@coinbase/cdp-react/components/SendSolanaTransactionButton";
 
 window.Buffer = Buffer;
 export const X402Context = createContext(null);
@@ -15,188 +17,192 @@ const isWalletError = (error) => {
   );
 };
 
+// Get network from environment variable or default to devnet
+const network = import.meta.env.VITE_SOLANA_NETWORK || "devnet";
+const isMainnet = network === "mainnet-beta";
+
+// Create a connection to Solana network
+const connection = new Connection(clusterApiUrl(network));
+
 export function X402Provider({ children }) {
-  const { connection } = useConnection();
-  const { publicKey, sendTransaction } = useWallet();
+  const { solanaAddress } = useSolanaAddress();
+  const { isSignedIn } = useIsSignedIn();
 
-  const executePayment = useCallback(
-    async (invoice, memo) => {
-      if (!publicKey || !sendTransaction) {
-        throw new Error("Wallet not connected.");
-      }
+  // Convert string address to PublicKey object when needed
+  const publicKey = solanaAddress ? new PublicKey(solanaAddress) : null;
 
-      console.log("Building transaction for invoice:", invoice);
-      console.log("Memo:", memo);
+  // Helper function to create and encode transaction for CDP
+  const createAndEncodeTransaction = useCallback(async (invoice, memo) => {
+    if (!publicKey) {
+      throw new Error("Wallet not connected.");
+    }
 
-      const tx = new Transaction();
-      const mintPubKey = new PublicKey(invoice.token);
-      const recipientWalletPubKey = new PublicKey(invoice.recipientWallet);
-      const payerPubKey = publicKey;
+    console.log("Building transaction for invoice:", invoice);
+    console.log("Memo:", memo);
 
-      const mintInfo = await getMint(connection, mintPubKey);
-      const amountInSmallestUnit = BigInt(
-        Math.floor(invoice.amount * Math.pow(10, mintInfo.decimals))
-      );
+    const tx = new Transaction();
+    const mintPubKey = new PublicKey(invoice.token);
+    const recipientWalletPubKey = new PublicKey(invoice.recipientWallet);
+    const payerPubKey = publicKey;
 
-      const payerTokenAccountAddress = await getAssociatedTokenAddress(
-        mintPubKey,
-        payerPubKey
-      );
-      const recipientTokenAccountAddress = await getAssociatedTokenAddress(
-        mintPubKey,
-        recipientWalletPubKey
-      );
+    const mintInfo = await getMint(connection, mintPubKey);
+    const amountInSmallestUnit = BigInt(
+      Math.floor(invoice.amount * Math.pow(10, mintInfo.decimals))
+    );
 
-      try {
-        await getAccount(connection, recipientTokenAccountAddress);
-      } catch (err) {
-        console.log("Recipient ATA does not exist, creating...");
-        tx.add(
-          createAssociatedTokenAccountInstruction(
-            payerPubKey,
-            recipientTokenAccountAddress,
-            recipientWalletPubKey,
-            mintPubKey
-          )
-        );
-      }
+    console.log("Transaction creation details:");
+    console.log("- Invoice amount:", invoice.amount);
+    console.log("- Mint decimals:", mintInfo.decimals);
+    console.log("- Calculated amount in smallest unit:", amountInSmallestUnit.toString());
+    console.log("- Expected amount in smallest unit:", (0.5 * Math.pow(10, mintInfo.decimals)).toString());
 
+    const payerTokenAccountAddress = await getAssociatedTokenAddress(
+      mintPubKey,
+      payerPubKey
+    );
+    const recipientTokenAccountAddress = await getAssociatedTokenAddress(
+      mintPubKey,
+      recipientWalletPubKey
+    );
+
+    try {
+      await getAccount(connection, recipientTokenAccountAddress);
+    } catch (err) {
+      console.log("Recipient ATA does not exist, creating...");
       tx.add(
-        createTransferInstruction(
-          payerTokenAccountAddress,
-          recipientTokenAccountAddress,
+        createAssociatedTokenAccountInstruction(
           payerPubKey,
-          amountInSmallestUnit
+          recipientTokenAccountAddress,
+          recipientWalletPubKey,
+          mintPubKey
         )
       );
+    }
 
-      tx.add(
-        new TransactionInstruction({
-          keys: [{ pubkey: payerPubKey, isSigner: true, isWritable: false }],
-          data: Buffer.from(memo, "utf-8"),
-          programId: new PublicKey("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"),
-        })
-      );
+    tx.add(
+      createTransferInstruction(
+        payerTokenAccountAddress,
+        recipientTokenAccountAddress,
+        payerPubKey,
+        amountInSmallestUnit
+      )
+    );
 
-      const { blockhash, lastValidBlockHeight } =
-        await connection.getLatestBlockhash();
-      tx.recentBlockhash = blockhash;
-      tx.feePayer = payerPubKey;
+    tx.add(
+      new TransactionInstruction({
+        keys: [{ pubkey: payerPubKey, isSigner: true, isWritable: false }],
+        data: Buffer.from(memo, "utf-8"),
+        programId: new PublicKey("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"),
+      })
+    );
 
-      const signature = await sendTransaction(tx, connection);
-      console.log("Transaction sent, awaiting confirmation:", signature);
-      await connection.confirmTransaction(
-        { signature, blockhash, lastValidBlockHeight },
-        "finalized"
-      );
-      console.log("Transaction finalized:", signature);
-      return signature;
-    },
-    [connection, publicKey, sendTransaction]
-  );
+    const { blockhash } = await connection.getLatestBlockhash();
+    tx.recentBlockhash = blockhash;
+    tx.feePayer = payerPubKey;
 
+    // Serialize and encode transaction for CDP
+    const serializedTransaction = tx.serialize({
+      requireAllSignatures: false,
+    });
+
+    return Buffer.from(serializedTransaction).toString("base64");
+  }, [connection, publicKey]);
+
+  // For CDP, we'll use a callback-based approach instead of direct transaction execution
+  const createPaymentTransaction = useCallback(async (invoice, memo) => {
+    if (!isSignedIn || !solanaAddress) {
+      throw new Error("Wallet not connected.");
+    }
+
+    return await createAndEncodeTransaction(invoice, memo);
+  }, [isSignedIn, solanaAddress, createAndEncodeTransaction]);
+
+  // Note: fetchWith402 is now handled by individual components using SendSolanaTransactionButton
+  // This function will need to be called with a callback that handles the transaction signing
   const fetchWith402 = useCallback(
     async (url, options = {}) => {
-      if (!publicKey) {
+      if (!solanaAddress) {
         throw new Error("Wallet not connected.");
       }
 
       const headers = new Headers(options.headers || {});
-      headers.append("x402-Payer-Pubkey", publicKey.toBase58());
+      headers.append("x402-Payer-Pubkey", solanaAddress);
 
       const res = await fetch(url, { ...options, headers });
 
       if (res.ok) {
         console.log("Fetch successful (via budget or public)");
-        return res.json(); 
+        return res.json();
       } else if (res.status === 402) {
         const invoice = await res.json();
         console.log("Received 402 invoice:", invoice);
 
-        const signature = await executePayment(invoice, invoice.reference);
-
-        const separator = url.includes("?") ? "&" : "?";
-        const retryUrl = `${url}${separator}reference=${invoice.reference}`;
-        const finalRes = await fetch(retryUrl, {
-          ...options,
-          headers: {
-            ...options.headers,
-            Authorization: `x402 ${signature}`,
-          },
-        });
-
-        if (!finalRes.ok) {
-          const finalError = await finalRes.json();
-          throw new Error(`Verification failed: ${finalError.error || "Server error"}`);
-        }
-        return finalRes.json(); 
+        // For CDP, we return the invoice and let the component handle the transaction
+        // The component will use SendSolanaTransactionButton to execute the payment
+        throw { isPaymentRequired: true, invoice, url, options };
       } else {
         const errorText = await res.text();
         throw new Error(`HTTP Error: ${res.status} ${res.statusText} - ${errorText}`);
       }
     },
-    [publicKey, executePayment]
+    [solanaAddress]
   );
 
   const API_BASE = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
 
   const depositBudget = useCallback(
-    async (invoiceUrl, amount) => {
-      if (!publicKey) {
+    async (_invoiceUrl, amount) => {
+      if (!solanaAddress) {
         throw new Error("Wallet not connected.");
       }
-      
-      let invoice;
-      const res402 = await fetch(invoiceUrl);
-      if (res402.status !== 402) {
-        const toolsRes = await fetch(`${API_BASE}/api/agent-tools`);
-        const tools = await toolsRes.json();
-        if (!tools || tools.length === 0)
-          throw new Error("Cannot get 402 invoice info for deposit.");
-        const fallbackRes = await fetch(`${API_BASE}${tools[0].endpoint}`);
-        if (fallbackRes.status !== 402)
-          throw new Error("Failed to fetch 402 invoice info.");
-        invoice = await fallbackRes.json();
-      } else {
-        invoice = await res402.json();
+
+      // Create a mock 402 invoice for budget deposit
+      console.log("Creating budget deposit invoice for amount:", amount);
+
+      // Create a budget deposit invoice structure
+      // For demo purposes, we'll send to the user's own wallet (self-transfer)
+      // In production, this should be your treasury wallet address
+      const budgetDepositInvoice = {
+        token: isMainnet ? "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" : "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU", // USDC
+        recipientWallet: solanaAddress, // Self-transfer for demo purposes
+        amount: amount,
+        reference: `TOPUP-${uuidv4()}`,
+        id: `budget-deposit-${Date.now()}`,
+        description: `Budget deposit of ${amount} USDC tokens`
+      };
+
+      const depositInvoice = { ...budgetDepositInvoice, amount: amount };
+      const depositReference = budgetDepositInvoice.reference;
+
+      try {
+        // Return transaction data for component to handle with SendSolanaTransactionButton
+        const transactionData = await createPaymentTransaction(depositInvoice, depositReference);
+
+        return {
+          transactionData,
+          invoice: depositInvoice,
+          reference: depositReference,
+          payerPubkey: solanaAddress,
+          amount: amount,
+          API_BASE
+        };
+      } catch (error) {
+        console.error("Error creating transaction for budget deposit:", error);
+        throw new Error(`Failed to create budget deposit transaction: ${error.message}`);
       }
-
-      const depositInvoice = { ...invoice, amount: amount };
-      const depositReference = `DEPOSIT-${invoice.reference}`;
-      const signature = await executePayment(depositInvoice, depositReference);
-
-      const confirmRes = await fetch(
-        `${API_BASE}/api/confirm-budget-deposit`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            signature,
-            reference: depositReference,
-            payerPubkey: publicKey.toBase58(),
-            amount: amount,
-          }),
-        }
-      );
-
-      if (!confirmRes.ok) {
-        const confirmError = await confirmRes.json();
-        throw new Error(`Deposit sent, but backend confirmation failed: ${confirmError.error}`);
-      }
-      
-      const confirmData = await confirmRes.json();
-      console.log("Budget deposit successful:", confirmData);
-      return confirmData; 
     },
-    [publicKey, executePayment, API_BASE]
+    [solanaAddress, createPaymentTransaction, API_BASE, isMainnet]
   );
 
   const value = {
     fetchWith402,
     depositBudget,
+    createPaymentTransaction,
     API_BASE,
     isWalletError,
-    publicKey,
+    publicKey: solanaAddress,
+    solanaAddress,
+    isSignedIn,
   };
 
   return <X402Context.Provider value={value}>{children}</X402Context.Provider>;

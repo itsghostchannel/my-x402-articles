@@ -28,10 +28,6 @@ export interface SolanaTransactionResponse {
   };
 }
 
-export interface KVClient {
-  get: (key: string) => Promise<any>;
-  set: (key: string, value: any, options?: any) => Promise<void>;
-}
 
 export interface ParsedInstruction {
   programId?: string;
@@ -212,4 +208,57 @@ export interface BudgetPaywallOptions {
 
 export interface X402PaywallOptions extends BudgetPaywallOptions {
   recipientWallet: string;
+}
+
+// SQLite Database Types
+export interface TransferRecord {
+  signature_id: string;
+  type_tx: 'top-up' | 'article' | 'article-one-time';
+  type_tx_nodes?: string;
+  from: string;
+  to: string;
+  solana_cluster: 'mainnet-beta' | 'devnet';
+  amount: number;
+  decimal: number;
+  token_symbol: string;
+  token_mint_address: string;
+  memo_value?: string;
+  created_at: number;
+}
+
+export interface BudgetBalance {
+  wallet_address: string;
+  solana_cluster: 'mainnet-beta' | 'devnet';
+  amount: number;
+  decimal: number;
+  token_symbol: string;
+  token_mint_address: string;
+  created_at: number;
+}
+
+export interface DatabaseConnection {
+  run: (sql: string, params?: any[]) => Promise<any>;
+  get: (sql: string, params?: any[]) => Promise<any>;
+  all: (sql: string, params?: any[]) => Promise<any[]>;
+}
+
+// Payment processing context
+export interface PaymentContext {
+  walletAddress: string;
+  solanaCluster: 'mainnet-beta' | 'devnet';
+  tokenMintAddress: string;
+  amount: number;
+  articleId?: string;
+}
+
+export interface TopUpContext {
+  signatureId: string;
+  from: string;
+  to: string;
+  solanaCluster: 'mainnet-beta' | 'devnet';
+  amount: number;
+  decimal: number;
+  tokenSymbol: string;
+  tokenMintAddress: string;
+  memoValue?: string;
 }

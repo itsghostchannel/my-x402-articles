@@ -42,6 +42,7 @@ interface ArticleListItem {
   price?: number;
   currencySymbol?: string;
   currencyName?: string;
+  previewContent?: string;
 }
 
 class ArticleService {

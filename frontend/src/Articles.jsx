@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from "react";
-import "@solana/wallet-adapter-react-ui/styles.css";
 import { useX402 } from "./useX402";
-import { useWallet } from "@solana/wallet-adapter-react";
+import { useIsSignedIn } from "@coinbase/cdp-hooks";
+import { SendSolanaTransactionButton } from "@coinbase/cdp-react/components/SendSolanaTransactionButton";
+import PaymentInfoDialog from "./PaymentInfoDialog.jsx";
 
 function Articles() {
-  const { fetchWith402, API_BASE } = useX402();
-  const { publicKey } = useWallet();
+  const { fetchWith402, API_BASE, solanaAddress, createPaymentTransaction, isWalletError } = useX402();
+  const { isSignedIn } = useIsSignedIn();
 
   // State for articles data
   const [freeArticles, setFreeArticles] = useState([]);
@@ -17,22 +18,157 @@ function Articles() {
   const [error, setError] = useState(null);
   const [activeTab, setActiveTab] = useState('premium');
 
+  // Payment state
+  const [pendingPayment, setPendingPayment] = useState(null);
+  const [showPaymentDialog, setShowPaymentDialog] = useState(false);
+  const [paymentDialogInfo, setPaymentDialogInfo] = useState(null);
+
   useEffect(() => {
     fetchArticles();
   }, []);
 
   // Re-fetch articles when wallet connects/disconnects
   useEffect(() => {
-    if (publicKey) {
+    if (isSignedIn && solanaAddress) {
       console.log("Wallet connected, re-fetching articles...");
       fetchArticles();
     } else {
       console.log("Wallet disconnected, clearing state and re-fetching articles...");
       setSelectedArticle(null);
       setError(null);
+      setPendingPayment(null);
+      setShowPaymentDialog(false);
+      setPaymentDialogInfo(null);
       fetchArticles();
     }
-  }, [publicKey]);
+  }, [isSignedIn, solanaAddress]);
+
+  const handlePaymentSuccess = async (signature, _originalUrl, _originalOptions, article) => {
+    try {
+      console.log("Article payment successful:", signature);
+      console.log("Payment invoice details:", pendingPayment?.invoice);
+
+      // Wait a brief moment for the blockchain to process
+      await new Promise(resolve => setTimeout(resolve, 3000));
+
+      // Use the correct headers based on the backend API documentation
+      console.log("Retrying article fetch with correct x402 headers...");
+
+      const separator = pendingPayment?.url?.includes("?") ? "&" : "?";
+      const retryUrl = `${pendingPayment?.url || `${API_BASE}/api/articles/${article.slug}`}${separator}reference=${pendingPayment?.invoice?.reference}`;
+
+      // Convert amount to smallest unit (USDC has 6 decimals)
+      const amountInSmallestUnit = Math.round(pendingPayment?.invoice?.amount * 1000000);
+
+      console.log("Sending amount in smallest unit:", amountInSmallestUnit);
+
+      const retryOptions = {
+        ...pendingPayment?.options,
+        headers: {
+          ...pendingPayment?.options?.headers,
+          'x402-payer-pubkey': solanaAddress, // lowercase as per API docs
+          'Authorization': `x402 ${signature}`, // correct format
+          // Try different header names for the amount
+          'x402-amount': amountInSmallestUnit.toString(),
+          'amount': amountInSmallestUnit.toString(),
+          'x402-payment-amount': amountInSmallestUnit.toString(),
+        },
+      };
+
+      console.log("Retry URL:", retryUrl);
+      console.log("Retry options:", retryOptions);
+
+      const finalRes = await fetch(retryUrl, retryOptions);
+
+      if (!finalRes.ok) {
+        const errorText = await finalRes.text();
+        console.error("Retry failed:", finalRes.status, errorText);
+
+        if (finalRes.status === 402) {
+          // Backend still doesn't recognize payment - try one more approach
+          console.log("Backend still requesting payment, trying direct fetchWith402 approach...");
+
+          // Wait longer and try one more time with fetchWith402
+          await new Promise(resolve => setTimeout(resolve, 5000));
+
+          try {
+            const articleData = await fetchWith402(`${API_BASE}/api/articles/${article.slug}`);
+            console.log("Final fetchWith402 attempt result:", articleData);
+
+            if (articleData) {
+              setSelectedArticle({
+                ...article,
+                content: articleData.fullContent || articleData.content || article.excerpt
+              });
+
+              setPendingPayment(null);
+              setError(null);
+              return;
+            }
+          } catch (finalError) {
+            console.error("Final fetchWith402 attempt failed:", finalError);
+          }
+
+          // All attempts failed
+          const solscanUrl = `https://solscan.io/tx/${signature}?cluster=devnet`;
+          setError({
+            type: 'payment',
+            text: "Payment processed but backend verification is still pending. The backend may not be configured to recognize this payment method. Transaction:",
+            transactionLink: { url: solscanUrl, text: `${signature.slice(0, 8)}...${signature.slice(-8)}` }
+          });
+        } else {
+          let finalError;
+          try {
+            finalError = JSON.parse(errorText);
+          } catch {
+            finalError = { error: errorText };
+          }
+
+          throw new Error(`Failed to retrieve article after payment: ${finalError.error || "Server error"}`);
+        }
+      } else {
+        // Success!
+        const result = await finalRes.json();
+        console.log("Article retrieved successfully after payment:", result);
+
+        // Show the article content after successful payment
+        setSelectedArticle({
+          ...article,
+          content: result.fullContent || result.content || article.excerpt
+        });
+
+        // Show payment dialog
+        setPaymentDialogInfo({
+          paymentMethod: result.paymentMethod || 'one-time',
+          signature: signature,
+          amount: pendingPayment?.invoice?.amount,
+          isOneTimePayment: true, // This was a one-time payment
+          accessMethod: 'paid'
+        });
+        setShowPaymentDialog(true);
+
+        setPendingPayment(null);
+        setError(null);
+      }
+    } catch (error) {
+      console.error("Payment verification failed:", error);
+
+      const solscanUrl = `https://solscan.io/tx/${signature}?cluster=devnet`;
+      setError({
+        text: `Payment succeeded but verification failed: ${error.message}`,
+        transactionLink: { url: solscanUrl, text: `${signature.slice(0, 8)}...${signature.slice(-8)}` }
+      });
+
+      setPendingPayment(null);
+    }
+  };
+
+  const handlePaymentError = (error) => {
+    console.error("Payment failed:", error);
+    const errorMsg = isWalletError(error) ? "Transaction cancelled by user." : error.message;
+    setError(`Payment failed: ${errorMsg}`);
+    setPendingPayment(null);
+  };
 
   const fetchArticles = async () => {
     setIsLoading(true);
@@ -67,8 +203,8 @@ function Articles() {
       setSelectedArticle(article);
     } else {
       // For premium articles, check wallet connection first
-      if (!publicKey) {
-        setError("Error: Wallet not connected. Please connect your wallet to access premium articles.");
+      if (!isSignedIn || !solanaAddress) {
+        setError("Error: Wallet not connected. Please sign in to access premium articles.");
         return;
       }
 
@@ -82,11 +218,46 @@ function Articles() {
             ...article,
             content: articleData.fullContent || articleData.content || article.excerpt
           });
+
+          // Show payment dialog for budget access
+          setPaymentDialogInfo({
+            paymentMethod: articleData.paymentMethod || 'budget',
+            signature: null, // Budget access doesn't have a transaction signature
+            amount: null,
+            isOneTimePayment: false, // This was budget access
+            accessMethod: 'budget'
+          });
+          setShowPaymentDialog(true);
         }
       } catch (err) {
-        // Check if it's a wallet connection error
-        if (err.message && err.message.includes("Wallet not connected")) {
-          setError("Error: Wallet not connected. Please reconnect your wallet and try again.");
+        // Check if it's a payment required error
+        if (err.isPaymentRequired) {
+          // Handle CDP payment flow - create transaction and show payment button
+          const { invoice, url, options } = err;
+
+          console.log("Received payment invoice:", invoice);
+
+          try {
+            const transactionData = await createPaymentTransaction(invoice, invoice.reference);
+
+            setPendingPayment({
+              invoice,
+              transactionData,
+              article, // Keep track of which article was being accessed
+              url,
+              options
+            });
+
+            setError({
+          type: 'payment',
+          message: `Payment required: ${invoice.amount} USDC to access this premium article.`
+        });
+          } catch (paymentError) {
+            console.error("Error creating payment transaction:", paymentError);
+            setError(`Failed to create payment transaction: ${paymentError.message}`);
+          }
+        } else if (err.message && err.message.includes("Wallet not connected")) {
+          setError("Error: Wallet not connected. Please sign in again and try again.");
         } else {
           setError(err.message);
         }
@@ -201,8 +372,54 @@ function Articles() {
       )}
 
       {error && (
-        <div className="mb-4 bg-red-50 border border-red-300 text-red-700 p-3 rounded-lg text-sm">
-          <strong>Error:</strong> {error}
+        <div className={`mb-4 p-3 rounded-lg text-sm border ${
+          error.type === 'payment'
+            ? 'bg-yellow-50 border border-yellow-300 text-yellow-700'
+            : 'bg-red-50 border border-red-300 text-red-700'
+        }`}>
+          <strong>{error.type === 'payment' ? 'Warning:' : 'Error:'}</strong>{' '}
+          {typeof error === 'string' ? error : (error.text || error.message)}
+          {error.transactionLink && (
+            <span>
+              {' '}Transaction:{' '}
+              <a
+                href={error.transactionLink.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-600 hover:text-blue-800 underline ml-1"
+              >
+                {error.transactionLink.text}
+              </a>
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Payment Button */}
+      {pendingPayment && solanaAddress && (
+        <div className="mb-4 p-4 border border-blue-200 rounded-lg bg-blue-50">
+          <h3 className="font-semibold text-sm mb-2">Complete Article Access</h3>
+          <p className="text-sm text-gray-600 mb-3">
+            Pay {pendingPayment.invoice.amount} USDC to access "{pendingPayment.article.title}"
+          </p>
+          <SendSolanaTransactionButton
+            account={solanaAddress}
+            network="solana-devnet"
+            transaction={pendingPayment.transactionData}
+            onSuccess={(signature) => handlePaymentSuccess(signature, pendingPayment.url, pendingPayment.options, pendingPayment.article)}
+            onError={handlePaymentError}
+          />
+          <button
+            onClick={() => {
+              setPendingPayment(null);
+              setError(null);
+              setShowPaymentDialog(false);
+              setPaymentDialogInfo(null);
+            }}
+            className="ml-2 text-sm text-gray-500 hover:text-gray-700"
+          >
+            Cancel
+          </button>
         </div>
       )}
 
@@ -287,6 +504,14 @@ function Articles() {
           </div>
         </div>
       )}
+
+      {/* Payment Info Dialog */}
+      <PaymentInfoDialog
+        isOpen={showPaymentDialog}
+        onClose={() => setShowPaymentDialog(false)}
+        paymentInfo={paymentDialogInfo}
+        articleTitle={selectedArticle?.title}
+      />
     </div>
   );
 }

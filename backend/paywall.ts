@@ -94,10 +94,112 @@ export async function verifyTransaction(
   };
 
   try {
+    const rpcUrl = getSolanaRpcUrl();
+    paymentLogger.info({
+      signature,
+      commitment: 'finalized',
+      rpcUrl
+    }, "Fetching transaction from RPC");
+
     const tx = await rpc.getTransaction(signature as Signature, {
       commitment: 'finalized',
       encoding: 'jsonParsed'
     }).send();
+
+    paymentLogger.info({
+      signature,
+      transactionFound: !!tx,
+      hasError: tx?.meta?.err,
+      meta: tx?.meta
+    }, "Transaction fetch result");
+
+    // If RPC call fails, try direct HTTP fetch as fallback
+    if (!tx) {
+      paymentLogger.info({
+        signature,
+        rpcUrl
+      }, "RPC call failed, trying direct HTTP fetch");
+
+      // Try different commitment levels
+      const commitments = ['confirmed', 'finalized'];
+
+      for (const commitment of commitments) {
+        try {
+          paymentLogger.info({
+            signature,
+            commitment,
+            rpcUrl
+          }, "Trying direct HTTP fetch with commitment");
+
+          const response = await fetch(rpcUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              jsonrpc: '2.0',
+              id: 1,
+              method: 'getTransaction',
+              params: [signature, { commitment, encoding: 'jsonParsed' }]
+            })
+          });
+
+          const result = await response.json() as any;
+          paymentLogger.info({
+            signature,
+            commitment,
+            directFetchSuccess: !!result.result,
+            result: result.result ? 'Transaction found' : 'Transaction not found',
+            httpStatus: response.status
+          }, "Direct HTTP fetch result");
+
+          if (result.result && !result.result.meta?.err) {
+            paymentLogger.info({
+              signature,
+              commitment
+            }, "Transaction verification successful via direct fetch");
+
+            // Extract amount from transaction properly
+            const preBalance = result.result.meta?.preTokenBalances?.find(
+              (b: any) => b.owner === recipientWallet && b.mint === splTokenMint
+            );
+            const postBalance = result.result.meta?.postTokenBalances?.find(
+              (b: any) => b.owner === recipientWallet && b.mint === splTokenMint
+            );
+
+            const preAmount = BigInt(preBalance?.uiTokenAmount?.amount || "0");
+            const postAmount = BigInt(postBalance?.uiTokenAmount?.amount || "0");
+            let amountReceived = postAmount - preAmount;
+
+            // For self-transfer transactions (budget deposits), extract from instruction
+            if (amountReceived === 0n && result.result.transaction?.message?.instructions) {
+              for (const instruction of result.result.transaction.message.instructions) {
+                if (instruction.parsed && instruction.parsed.type === 'transfer') {
+                  const transferAmount = instruction.parsed.info.amount;
+                  if (transferAmount) {
+                    amountReceived = BigInt(transferAmount);
+                    break;
+                  }
+                }
+              }
+            }
+
+            const mintAddress = address(splTokenMint);
+            const mintAccount: Account<Mint> = await fetchMint(rpc, mintAddress);
+
+            return {
+              success: true,
+              amountReceived: Number(amountReceived) / Math.pow(10, mintAccount.data.decimals),
+              amountReceivedSmallestUnit: amountReceived
+            };
+          }
+        } catch (fetchError: any) {
+          paymentLogger.error({
+            signature,
+            commitment,
+            error: fetchError.message
+          }, "Direct HTTP fetch failed for commitment");
+        }
+      }
+    }
 
     if (!tx || (tx.meta && tx.meta.err)) {
       throw new PaymentVerificationError("Transaction failed or not found", context);
@@ -137,7 +239,22 @@ export async function verifyTransaction(
 
     const preAmount = BigInt(preBalance?.uiTokenAmount?.amount || "0");
     const postAmount = BigInt(postBalance?.uiTokenAmount?.amount || "0");
-    const amountReceived = postAmount - preAmount;
+    let amountReceived = postAmount - preAmount;
+
+    // For self-transfer transactions (budget deposits), the balance difference will be 0
+    // In this case, we need to verify the transaction amount from the transfer instruction
+    if (amountReceived === 0n && tx.transaction.message.instructions) {
+      // Look for transfer instructions to extract the amount
+      for (const instruction of tx.transaction.message.instructions) {
+        if (instruction.parsed && instruction.parsed.type === 'transfer') {
+          const transferAmount = instruction.parsed.info.amount;
+          if (transferAmount) {
+            amountReceived = BigInt(transferAmount);
+            break;
+          }
+        }
+      }
+    }
 
     const logContext: TransactionMetadata = {
       preBalance: preAmount.toString(),
@@ -209,11 +326,59 @@ export const budgetPaywall = ({ amount, splToken }: BudgetPaywallOptions) =>
     const context: BudgetOperationContext = { payer: payerPubkey };
 
     try {
-      const currentBudget = BigInt((await storage.getBudget(payerPubkey)));
-
       const mintAddress = address(splToken);
       const mintAccount: Account<Mint> = await fetchMint(rpc, mintAddress);
       requiredAmount = BigInt(Math.floor(amount * Math.pow(10, mintAccount.data.decimals)));
+
+      // Try new SQLite payment processing first
+      try {
+        const paymentContext = {
+          walletAddress: payerPubkey,
+          solanaCluster: process.env.SOLANA_NETWORK === 'mainnet-beta' ? 'mainnet-beta' : 'devnet',
+          tokenMintAddress: splToken,
+          amount: Number(requiredAmount),
+          articleId: req.query.id as string || req.params.id
+        };
+
+        const paymentResult = await storage.processArticlePayment(paymentContext);
+
+        if (paymentResult.success) {
+          // Payment processed from budget successfully
+          context.amountDeducted = requiredAmount.toString();
+          context.remainingBudget = "0"; // Will be updated by SQLite storage
+
+          budgetLogger.info({
+            ...context,
+            method: "SQLite budget",
+            articleId: paymentContext.articleId
+          }, "Budget paywall: Article payment processed via SQLite budget");
+
+          req.x402_payment_method = "budget";
+          req.cms_access_granted = true;
+          return next();
+        } else if (paymentResult.requiresOneTimePayment) {
+          // Insufficient budget, continue to one-time payment
+          context.requiredAmount = requiredAmount.toString();
+          context.availableBudget = "0";
+
+          budgetLogger.debug({
+            ...context,
+            method: "SQLite budget check",
+            articleId: paymentContext.articleId
+          }, "Budget paywall: Insufficient budget, requires one-time payment");
+
+          return next();
+        }
+      } catch (sqliteError: any) {
+        budgetLogger.warn({
+          error: sqliteError.message,
+          payer: payerPubkey,
+          amount: amount
+        }, "SQLite budget processing failed, falling back to legacy method");
+      }
+
+      // Fallback to legacy budget method
+      const currentBudget = BigInt((await storage.getBudget(payerPubkey)));
 
       if (currentBudget >= requiredAmount) {
         // Budget sufficient!
@@ -221,7 +386,7 @@ export const budgetPaywall = ({ amount, splToken }: BudgetPaywallOptions) =>
         context.amountDeducted = requiredAmount.toString();
         context.remainingBudget = newBudget.toString();
 
-        budgetLogger.info(context, "Budget paywall: Using prepaid budget");
+        budgetLogger.info(context, "Budget paywall: Using prepaid budget (legacy method)");
         await storage.setBudget(payerPubkey, newBudget.toString());
         req.x402_payment_method = "budget";
         req.cms_access_granted = true;
@@ -298,6 +463,36 @@ export function x402Paywall({ amount, splToken, recipientWallet }: X402PaywallOp
 
         if (verification.success && verification.amountReceivedSmallestUnit === requiredAmountSmallestUnit) {
           await storage.addReference(refKey, { ex: 300 });
+
+          // Record one-time article payment in SQLite if available
+          try {
+            const articleId = req.query.id as string || req.params.id;
+            if (articleId) {
+              // Extract the from address from request headers (CDP Embedded Wallets)
+              const payerPubkeyHeader = req.headers["x402-payer-pubkey"];
+              const fromAddress = Array.isArray(payerPubkeyHeader) ? payerPubkeyHeader[0] : payerPubkeyHeader;
+
+              await storage.processOneTimeArticlePayment(
+                signature,
+                fromAddress,
+                recipientWallet.trim(),
+                process.env.SOLANA_NETWORK === 'mainnet-beta' ? 'mainnet-beta' : 'devnet',
+                Number(requiredAmountSmallestUnit),
+                mintAccount.data.decimals,
+                splToken.trim(),
+                splToken.trim(),
+                articleId,
+                reference
+              );
+            }
+          } catch (sqliteError: any) {
+            paymentLogger.warn({
+              error: sqliteError.message,
+              signature,
+              articleId: req.query.id as string || req.params.id
+            }, "Failed to record one-time payment in SQLite");
+          }
+
           paymentLogger.info({
             signature,
             reference,
@@ -307,10 +502,25 @@ export function x402Paywall({ amount, splToken, recipientWallet }: X402PaywallOp
           req.cms_access_granted = true;
           return next();
         } else {
-          let errorMsg = verification.error;
-          if (verification.amountReceivedSmallestUnit !== requiredAmountSmallestUnit) {
-            errorMsg = `Incorrect token amount. Received: ${verification.amountReceivedSmallestUnit}, Required: ${requiredAmountSmallestUnit}`;
+          let errorMsg = verification.error || "Unknown verification error";
+
+          // Only check amount mismatch if we actually received an amount
+          if (typeof verification.amountReceivedSmallestUnit !== 'undefined') {
+            if (verification.amountReceivedSmallestUnit !== requiredAmountSmallestUnit) {
+              errorMsg = `Incorrect token amount. Received: ${verification.amountReceivedSmallestUnit}, Required: ${requiredAmountSmallestUnit}`;
+            }
+          } else {
+            // If we don't have amount information, it's likely a validation error
+            errorMsg = `Payment verification failed: ${errorMsg}`;
           }
+
+          paymentLogger.warn({
+            error: errorMsg,
+            verificationResult: verification,
+            signature,
+            reference
+          }, "Payment verification failed");
+
           res.status(401).json({ error: `Invalid payment: ${errorMsg}` });
           return;
         }

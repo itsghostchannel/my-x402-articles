@@ -10,24 +10,27 @@
     "build:watch": "tsc --watch"
   },
   "dependencies": {
-    "@solana/kit": "^5.0.0",
     "@solana-program/token": "^0.8.0",
+    "@solana/kit": "^5.0.0",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.5",
     "@types/node": "^22.0.0",
     "@types/pino": "^6.3.12",
-    "@vercel/kv": "^3.0.0",
     "cors": "^2.8.5",
-    "pino": "^9.6.0",
-    "pino-pretty": "^13.0.0",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
     "express-rate-limit": "^7.4.1",
     "front-matter": "^4.0.2",
     "gray-matter": "^4.0.3",
-    "marked": "^17.0.0"
+    "marked": "^17.0.0",
+    "pino": "^9.6.0",
+    "pino-pretty": "^13.0.0",
+    "sqlite": "^5.1.1",
+    "sqlite3": "^5.1.7",
+    "uuid": "^13.0.0"
   },
   "devDependencies": {
+    "@types/uuid": "^10.0.0",
     "nodemon": "^3.1.10",
     "ts-node-dev": "^2.0.0",
     "typescript": "^5.9.3"
