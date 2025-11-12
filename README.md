@@ -339,8 +339,9 @@ If you encounter any issues:
 
 ## 🌐 Demo (Online)
 
-- *[x402articles DEVNET](https://x402articles.xyz/)*
-- *[ATXP MCP Server](https://mcp.x402articles.xyz/)*
+- [x402articles DEVNET](https://x402articles.xyz/)
+- [ATXP MCP Server](https://mcp.x402articles.xyz/)
+- [x402articles MAINET](https://mainnet.x402articles.xyz/) 
 
 ## 📖 Additional Documentation
 
