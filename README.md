@@ -326,6 +326,11 @@ If you encounter any issues:
 3. Create a new issue with detailed information
 4. Join our community discussions
 
+## 🌐 Demo (Online)
+
+- *[x402articles DEVNET](https://x402articles.xyz/)*
+- *[ATXP MCP Server](https://mcp.x402articles.xyz/)*
+
 ## 📖 Additional Documentation
 
 - [Architecture Guide](./docs/architecture.md)
