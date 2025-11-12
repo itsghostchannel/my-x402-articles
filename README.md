@@ -1,31 +1,44 @@
-# x402 Articles: Blockchain-Powered Content Monetization
+# x402 Articles
 
-A modern micropayment system built on the Solana blockchain that enables content creators to monetize their articles through blockchain-based payments using the x402 HTTP payment protocol. Readers and AI agents can now pay per article (from $0.01) with minimal fees, so creators keep nearly all revenue.
+Solana-powered micropayments that make per-article monetization viable for creators and AI agents alike.
 
-## 🌟 Overview
+**Solana x402 Hackathon Submission** | Team: Arikia + Ghost Channel | November 2025
 
-**X402 Articles** is a comprehensive content management system (CMS) that combines traditional web technologies with cutting-edge blockchain payments. It allows authors to publish premium content behind a paywall while providing readers with seamless access through Solana SPL token payments.
+## Overview
+
+**x402 Articles** demonstrates how the x402 protocol on Solana enables viable micropayments for digital content. Readers can pay per article starting at $0.01, creators receive 97-99% of revenue, and AI agents can autonomously purchase access to training data—all with transaction fees under $0.001.
+
+This project is a production-ready proof-of-concept for sustainable creator economics on blockchain.
+
+### Problem
+
+Traditional payment processors charge 2.9% + $0.30 per transaction. At $0.01 per article, that's a 3,100% fee—making micropayments economically impossible. 
+
+### Solution
+
+Employing the x402 protocol on Solana enables sub-cent transactions with fees under $0.001, making creator-owned, reader-paid content viable.
+
 
 ### Key Features
 
-- **🔗 Blockchain Payments**: Built on Solana blockchain with SPL token support (USDC)
-- **💰 Micropayments**: Pay-per-article model with minimal transaction costs
-- **📚 Content Management**: Markdown-based article system with rich metadata
-- **🤖 AI Assistant**: Integrated agent for content discovery and assistance
-- **💳 Budget System**: Pre-paid budget for seamless article access
-- **🔒 Security First**: Input validation, rate limiting, and secure transaction handling
-- **📱 Responsive Design**: Mobile-first UI built with React and Tailwind CSS
+- **x402 Protocol Integration**: HTTP 402 Payment Required for content access with Solana transaction verification
+- **Micropayments**: Pay-per-article starting at $0.01 with fees under $0.001
+- **ATXP MCP Server**: Model Context Protocol integration enabling AI agents to discover and autonomously pay for content
+- **Multi-Token Support**: USDC primary, CASH token integration for Phantom ecosystem
+- **Creator Revenue**: 97-99% payout to creators (vs. 67-89% with traditional processors)
+- **Secure & Scalable**: Input validation, rate limiting, blockchain-verified transactions
 
-## 🏗️ Architecture
+
+## Architecture
 
 The project consists of two main components:
 
 ### Backend (Node.js/TypeScript)
 - **Framework**: Express.js with TypeScript
-- **Blockchain**: Solana Web3.js integration
-- **Database**: SQLite with optional Vercel KV support
+- **Blockchain**: Solana Web3.js integration for x402 payment verification
+- **Database**: SQLite (Vercel KV for production)
 - **Content**: Markdown processing with gray-matter
-- **Security**: Comprehensive validation and rate limiting
+- **Security**: Input validation, rate limiting, transaction verification
 
 ### Frontend (React)
 - **Framework**: React 18.3.1 with modern hooks
@@ -108,16 +121,14 @@ The project consists of two main components:
 ## 💰 Payment System
 
 ### How It Works
-
-1. **Budget System**: Users can deposit funds into a pre-paid budget for seamless access
-2. **x402 Protocol**: When budget is insufficient, users receive HTTP 402 Payment Required responses
-3. **On-Demand Payments**: Users can pay per article using Solana SPL tokens
-4. **Transaction Verification**: All payments are verified on the blockchain before access is granted
+1. **Budget System**: Users deposit funds for seamless article access
+2. **x402 Protocol**: Insufficient budget triggers HTTP 402 Payment Required response
+3. **On-Demand Payments**: Per-article payment via Solana SPL tokens
+4. **Blockchain Verification**: All transactions verified before content access granted
 
 ### Supported Tokens
-
-- **Primary**: USDC (USD Coin) on Solana devnet/mainnet
-- **Extensible**: Supports any SPL token on Solana
+- **Primary**: USDC on Solana devnet/mainnet
+- **Extended**: CASH (Phantom ecosystem), any SPL token
 
 ### Payment Flow
 
@@ -221,7 +232,7 @@ Authorization: x402 <transaction-signature>
 ### Project Structure
 
 ```
-x402-new/
+my-x402-articles/
 ├── backend/                    # Node.js/TypeScript backend
 │   ├── src/
 │   │   ├── app.ts             # Main Express application
@@ -236,7 +247,7 @@ x402-new/
 │   │   ├── App.jsx            # Main application component
 │   │   ├── x402.jsx           # x402 payment provider
 │   │   ├── Articles.jsx       # Article display component
-│   │   ├── AgentComponent.jsx # AI assistant component
+│   │   ├── AgentComponent.jsx # AI agent integration
 │   │   └── ...
 │   └── package.json
 └── docs/                      # Documentation
